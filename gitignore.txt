@@ -1,0 +1,30 @@
+# Python Virtual Environments
+venv/
+env/
+.venv/
+__pycache__/
+
+# Compiled source (TensorFlow/PyTorch/MediaPipe 등에서 발생 가능)
+*.so
+*.pyd
+*.o
+*.pyc
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Big Model Files (MediaPipe 모델 파일)
+# MediaPipe 모델 파일은 용량이 크므로 제외하는 것을 고려할 수 있습니다.
+pose_landmarker_full.task
+
+# SORT 모듈의 pyc 파일은 제외하고, 코드는 포함합니다.
+# sort/ 폴더를 전체 포함하려면, 아래는 필요 없습니다.
+
+# Ultralytics, TensorBoard 등 설치된 라이브러리 파일
+# (이전 경고 메시지에서 보인 'venv/Lib/site-packages' 전체를 제외함)
+# venv/ 를 제외했기 때문에 이미 대부분의 라이브러리 파일은 제외됩니다.
+
+# Jupyter Notebook/IDE Files
+.ipynb_checkpoints
+.vscode/
