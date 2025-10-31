@@ -1,4 +1,6 @@
-mediapipe
+ultralytics
 opencv-python
 numpy
-pandas
+scikit-image
+lap
+filterpy
