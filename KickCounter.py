@@ -62,7 +62,7 @@ def letterbox(img, new_shape=(1080, 1920), color=(0, 0, 0)):
 
     if shape[::-1] != new_unpad:  # 리사이즈가 필요하면
         img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-    
+        
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
 
@@ -138,7 +138,7 @@ def get_calibration_boxes(max_players, W, H, bottom_margin=20):
     num_sections = max_players + 1
     for i in range(1, num_sections):
         positions.append((W // num_sections) * i)
-                            
+                        
     for cx in positions:
         x1 = cx - (box_width // 2)
         y1 = H - bottom_margin - box_height
@@ -159,10 +159,10 @@ def draw_menu_ui(state, frame_dims=(1920, 1080), fonts=None, mouse_pos=(0,0), pl
     H, W = frame_dims[1], frame_dims[0] # (1080, 1920)
     
     PLAYER_SELECT_ZONES = [
-        (98, 303, 402, 902),    # 1인 구역
-        (509, 303, 813, 902),   # 2인 구역
-        (920, 303, 1224, 902),  # 3인 구역
-        (1331, 303, 1635, 902)  # 4인 구역
+        (98, 303, 402, 902),     # 1인 구역
+        (509, 303, 813, 902),    # 2인 구역
+        (920, 303, 1224, 902),   # 3인 구역
+        (1331, 303, 1635, 902)   # 4인 구역
     ]
     active_hover_zone = -1 
 
@@ -284,13 +284,12 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
     game_state 딕셔너리를 직접 수정합니다.
     """
 
+    # [★★★ UnboundLocalError 버그 수정 ★★★]
     pil_draw_list = []
     
     # === [★★★ 버그 수정 ★★★] ===
-    # 1. 분석은 원본 'frame'으로 수행 (성능/정확도 향상)
     results = model(frame, conf=0.6, verbose=False) 
     
-    # 2. 좌표 변환에 사용할 스케일/패딩 값
     scale_x = ratio_x
     scale_y = ratio_y
     pad_x_val = pad_w
@@ -305,7 +304,6 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
             for i in range(len(xy_data)):
                 
                 # --- [★★★ 버그 수정 ★★★] ---
-                # 3. 원본 frame 기준 좌표를 letterboxed_frame 기준으로 변환
                 person_kp = xy_data[i].cpu().numpy()
                 person_conf = conf_data[i].cpu().numpy()
 
@@ -319,25 +317,20 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                 min_y, max_y = np.min(valid_kps[:,1]), np.max(valid_kps[:,1])
                 dets.append([min_x, min_y, max_x, max_y, 1.0])
                 keypoints_list.append((person_kp, person_conf))
-                         
+                          
     dets = np.array(dets) if len(dets) > 0 else np.empty((0, 5))
     
-    # 인원 제한 로직
-    if len(dets) > max_players:
-        sorted_indices = sorted(range(len(dets)), key=lambda k: (dets[k][2]-dets[k][0]) * (dets[k][3]-dets[k][1]), reverse=True)
-        dets_to_track = np.array([dets[i] for i in sorted_indices[:max_players]])
-        keypoints_list_to_track = [keypoints_list[i] for i in sorted_indices[:max_players]]
-    else:
-        dets_to_track = dets
-        keypoints_list_to_track = keypoints_list
-           
+    # [★★★ 치명적 버그 수정 ★★★]
+    dets_to_track = dets
+    keypoints_list_to_track = keypoints_list
+    # [★★★ 버그 수정 끝 ★★★]
+            
     tracks = tracker.update(dets_to_track) 
 
     # --- ID별 로직 처리 ---
     active_track_ids = set()
     matched = set()
     
-    # game_state에서 필요한 변수들 로컬로 가져오기 (가독성)
     base_data = game_state['base_data']
     track_id_to_player_id = game_state['track_id_to_player_id']
     floor_timers = game_state['floor_timers']
@@ -350,7 +343,6 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
     r_reset_counter = game_state['r_reset_counter']
     person_kick_timer = game_state['person_kick_timer']
 
-    # 설정값
     JOINT_CONF_THRESH = game_state['JOINT_CONF_THRESH']
     CALIBRATION_TIME = game_state['CALIBRATION_TIME']
     STABILITY_THRESH = game_state['STABILITY_THRESH']
@@ -372,8 +364,7 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
 
             person_xy, person_conf = keypoints_list_to_track[best_idx]
             head_x, head_y = person_xy[0][0], person_xy[0][1]
-            l_ankle_conf, r_ankle_conf = person_conf[15], person_conf[16]
-            if l_ankle_conf < JOINT_CONF_THRESH and r_ankle_conf < JOINT_CONF_THRESH: continue
+            
             foot_y = max(person_xy[15][1], person_xy[16][1])
             min_x, min_y, max_x, max_y = int(x1), int(y1), int(x2), int(y2)
             current_bbox_height, current_bbox_width = max_y - min_y, max_x - min_x
@@ -385,30 +376,23 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
             # 5. 캘리브레이션 단계
             if track_id not in base_data:
                 
-                # [★★★ 게임 모드 제한 추가 ★★★]
-                # 게임 모드 중(is_game_mode=True)에는 신규 캘리브레이션 중단
                 if is_game_mode:
                     continue
 
-                # [★★★ 추가] 박스 체크 로직
                 l_ankle_xy, r_ankle_xy = person_xy[15][:2], person_xy[16][:2]
                 is_in_any_box = False
                 current_box_index = -1
                 calibrated_box_indices = game_state['calibrated_box_indices']
 
                 if calibration_boxes is not None:
-                    # GAME_RUNNING 상태일 때만 박스 체크
                     for i, box in enumerate(calibration_boxes):
                         if is_point_in_box(l_ankle_xy, box) or is_point_in_box(r_ankle_xy, box):
-                            if i in calibrated_box_indices: continue # 이미 사용 중인 박스
+                            if i in calibrated_box_indices: continue
                             is_in_any_box = True
                             current_box_index = i
-                            game_state['active_calib_boxes'][i] = track_id # UI용
+                            game_state['active_calib_boxes'][i] = track_id
                             break
-                # (else: 게임 모드일 때는 이 로직이 실행되지 않음)
                 
-                # [★★★ 추가 끝]
-
                 base_height = foot_y - head_y
                 
                 is_standing_aspect_ratio = current_bbox_height > (current_bbox_width * 1.3) 
@@ -422,30 +406,26 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                                   (hip_width > base_height * (FRONT_FACING_WIDTH_RATIO - 0.02))
                 
                 l_hip_xy, r_hip_xy = person_xy[11][:2], person_xy[12][:2]
-                l_ankle_xy, r_ankle_xy = person_xy[15][:2], person_xy[16][:2] # (로그용으로 남겨둠)
+                l_ankle_xy, r_ankle_xy = person_xy[15][:2], person_xy[16][:2]
                 l_leg_dist_2d = calculate_distance(l_hip_xy, l_ankle_xy)
                 r_leg_dist_2d = calculate_distance(r_hip_xy, r_ankle_xy)
                 l_leg_dist_y = abs(l_ankle_xy[1] - l_hip_xy[1])
                 r_leg_dist_y = abs(r_ankle_xy[1] - r_hip_xy[1])
-                LEG_STRAIGHTNESS_RATIO = 0.80 # 예전 80%
+                LEG_STRAIGHTNESS_RATIO = 0.80
                 is_l_leg_straight = (l_leg_dist_2d > 10) and ((l_leg_dist_y / l_leg_dist_2d) > LEG_STRAIGHTNESS_RATIO)
                 is_r_leg_straight = (r_leg_dist_2d > 10) and ((r_leg_dist_y / r_leg_dist_2d) > LEG_STRAIGHTNESS_RATIO)
                 is_standing = is_l_leg_straight or is_r_leg_straight
                 
-                # [★★★ 디버그 로그 ★★★] (항상 출력)
                 print(f"--- ID {track_id} 캘리브레이션 조건 확인 ---")
-                print(f"  1. 박스 안에 있나?: {is_in_any_box}") # [추가]
+                print(f"  1. 박스 안에 있나?: {is_in_any_box}")
                 print(f"  2. 전신이 보이나?: {is_full_body_visible}")
                 print(f"  3. 키가 적당한가?: {base_height > 100} (키: {base_height:.0f})")
                 print(f"  4. 서 있는 자세?:  {is_standing}")
-                print(f"  5. 정면을 보나?:   {is_facing_front}")
-                print(f"  6. 비율이 맞나?:   {is_standing_aspect_ratio}")
+                print(f"  5. 정면을 보나?:    {is_facing_front}")
+                print(f"  6. 비율이 맞나?:    {is_standing_aspect_ratio}")
                 print("-------------------------------------")
 
-                # [수정] 캘리브레이션 시작/진행/완료/실패 로직
-                # [★★★ 수정] is_in_any_box 조건 추가
                 if is_in_any_box and is_full_body_visible and base_height > 100 and is_standing and is_facing_front and is_standing_aspect_ratio:
-                    # 1. 모든 조건 만족: 타이머 시작 또는 갱신
                     current_time = time.time()
                     if floor_timers[track_id] is None:
                         floor_timers[track_id] = current_time
@@ -455,14 +435,10 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                         elapsed = current_time - floor_timers[track_id]
                         
                         if elapsed > CALIBRATION_TIME:
-                            # 2. 시간(2초) 충족: 안정성 검사
                             history = floor_y_history[track_id]
                             y_movement = np.max(history) - np.min(history)
                             
                             if y_movement < STABILITY_THRESH:
-                                # 3. [성공] 안정성 검사 통과
-                                
-                                # [★★★ 추가] 캘리브레이션 성공 시 박스 인덱스 저장
                                 box_index_to_calibrate = current_box_index
                                 if box_index_to_calibrate != -1:
                                     calibrated_box_indices.add(box_index_to_calibrate)
@@ -487,7 +463,7 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                                     "Y_MID": Y_MID, "X_MID": X_MID, "Z_MID_EST_L": Z_MID_EST_L, "Z_MID_EST_R": Z_MID_EST_R,
                                     "Y_HIGH": Y_HIGH, "Z_HIGH_EST_L": Z_HIGH_EST_L, "Z_HIGH_EST_R": Z_HIGH_EST_R,
                                     "Y_RST": Y_RST, "Z_RST_EST_L": Z_RST_EST_L, "Z_RST_EST_R": Z_RST_EST_R,
-                                    "box_index": box_index_to_calibrate # [★★★ 추가]
+                                    "box_index": box_index_to_calibrate
                                 }
                                 
                                 if track_id not in track_id_to_player_id:
@@ -501,33 +477,21 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                                 kick_counters[track_id] = 0; l_kick_state[track_id] = 0; r_kick_state[track_id] = 0;
                                 l_reset_counter[track_id] = 0; r_reset_counter[track_id] = 0; person_kick_timer[track_id] = 0;
                                 
-                                # [★★★ 버그 수정 ★★★]
-                                # 캘리브레이션 성공 시 타이머를 리셋하여 게이지 UI를 끄고
-                                # 킥 카운트 UI로 넘어가도록 함
                                 floor_timers[track_id] = None
                                 floor_y_history[track_id] = []
                             
                             else:
-                                # 4. [실패] 안정성 검사 실패 (흔들림)
-                                # [★★★ 로그 수정 ★★★]
                                 print(f"--- ID {track_id} 캘리브레이션 실패: 2초간 Y축 흔들림 {y_movement:.1f}px (기준: {STABILITY_THRESH}px) ---")
                                 floor_timers[track_id], floor_y_history[track_id] = None, []
                                 if track_id in base_data: del base_data[track_id] 
                 else:
-                    # 5. [실패] 조건 중 하나라도 불만족 (자세 이탈 또는 박스 이탈)
-                    
-                    # [★★★ 로그 추가 ★★★]
                     if floor_timers[track_id] is not None:
-                        # 타이머가 방금 None이 될 것이므로, 직전에 0이 아니었다면 로그 출력
                         reason = "박스 이탈" if not is_in_any_box else "자세 이탈"
                         print(f"--- ID {track_id} 캘리브레이션 중단: {reason} ---")
                     
                     floor_timers[track_id], floor_y_history[track_id] = None, []
                     if track_id in base_data: del base_data[track_id] 
             
-            # 캘리브레이션 게이지 UI (OpenCV로 직접 그림)
-            # [★★★ 버그 수정 ★★★]
-            # (수정) floor_timers[track_id]가 None이 아닐 때만 게이지를 그림
             if is_head_visible and floor_timers[track_id] is not None and fonts:
                 ui_center_x, ui_center_y, radius = int(head_x), int(head_y) - 60, 30
                 elapsed = time.time() - floor_timers[track_id]
@@ -548,21 +512,31 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                 pil_draw_list.append( (text_percent, text_pos, fonts['ui_percent'], (255,255,255), None) ) 
 
             # 6. 킥 카운트 단계
-            # [★★★ 버그 수정 ★★★]
-            # (수정) 캘리브레이션 게이지를 그리지 *않고* (타이머가 None), 
-            # base_data에 정보가 있을 때 킥 카운트 UI를 그림
             elif is_head_visible and fonts and track_id in base_data:
                 if "base_height" not in base_data[track_id]:
                     continue
-                        
+                                
                 pd = base_data[track_id] 
                 
                 is_too_close = (current_bbox_height > pd['base_bbox_height'] * 2.0) or (current_bbox_width > pd['base_bbox_width'] * 2.0) 
 
                 if is_too_close:
-                    final_scores[track_id_to_player_id.get(track_id, 0)] = kick_counters[track_id]; del base_data[track_id]; print(f"ID {track_id} (Player {track_id_to_player_id.get(track_id, '?')}) 너무 가까움. 리셋.")
+                    player_id = track_id_to_player_id.get(track_id, 0)
+                    if player_id != 0:
+                        final_scores[player_id] = kick_counters[track_id]
+                    
+                    # --- [★★★ 버그 수정 ★★★] ---
+                    if "box_index" in pd: 
+                        box_idx = pd.get("box_index", -1)
+                        if box_idx != -1 and box_idx in game_state['calibrated_box_indices']:
+                            game_state['calibrated_box_indices'].remove(box_idx)
+                            print(f"-> 박스 {box_idx} 반납됨 (너무 가까움).")
+                    # --- [수정 끝] ---
+                    
+                    if track_id in base_data: del base_data[track_id]
+                    print(f"ID {track_id} (Player {player_id}) 너무 가까움. 리셋.")
+                
                 else:
-                    # --- 1. 현재 값 계산 ---
                     current_l_ankle_x, current_l_ankle_y = person_xy[15][0], person_xy[15][1]
                     current_r_ankle_x, current_r_ankle_y = person_xy[16][0], person_xy[16][1]
                     l_ankle_conf, r_ankle_conf = person_conf[15], person_conf[16]
@@ -631,7 +605,6 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                             else: r_reset_counter[track_id] = 0
                             if r_reset_counter[track_id] >= RESET_FRAME_COUNT: r_kick_state[track_id] = 0; print(f"Player {player_id} R-Kick RESET.")
                     
-                    # 킥 카운트 UI (OpenCV로 직접 그림)
                     ui_center_x, ui_center_y, radius = int(head_x), int(head_y) - 60, 30
                     player_id = track_id_to_player_id.get(track_id, "?")
                     text_count = f'{player_id}'
@@ -656,14 +629,11 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
                     pil_draw_list.append( (count_str, pos_kick, fonts['ui_kick'], (255, 255, 255), (0,0,0)) ) 
     
     # --- [★★★ 1초 유예 기간 로직 수정 ★★★] ---
-    # 8. 사라진 ID 처리
     lost_id_timers = game_state['lost_id_timers']
     current_time = time.time()
     
-    # 현재 프레임에서 추적된 ID (캘리브레이션 중이거나 완료된 ID)
     tracked_ids = set(base_data.keys()) | set(k for k,v in floor_timers.items() if v is not None)
     
-    # 1. 새로 사라진 ID 탐지 및 타이머 시작
     newly_lost_ids = tracked_ids - active_track_ids
     for lost_track_id in newly_lost_ids:
         if lost_track_id not in lost_id_timers:
@@ -671,39 +641,32 @@ def process_frame_logic(frame, letterboxed_frame, ratio_x, ratio_y, pad_w, pad_h
             player_id_str = track_id_to_player_id.get(lost_track_id, '?')
             print(f"ID {lost_track_id} (Player {player_id_str}) 추적 임시 손실. 1초 유예 시작...")
 
-    # 2. 유예 기간 중인 ID 검사 (돌아왔거나, 1초가 지났거나)
     GRACE_PERIOD = 1.0
     for track_id in list(lost_id_timers.keys()):
         if track_id in active_track_ids:
-            # 2a. [재추적 성공] ID가 다시 돌아옴
             del lost_id_timers[track_id]
             player_id_str = track_id_to_player_id.get(track_id, '?')
             print(f"ID {track_id} (Player {player_id_str}) 재추적 성공. 유예 취소.")
         
         elif (current_time - lost_id_timers[track_id]) > GRACE_PERIOD:
-            # 2b. [영구 손실] 1초 유예 기간 만료. 데이터 삭제.
             player_id = track_id_to_player_id.get(track_id, 0)
             print(f"ID {track_id} (Player {player_id}) 1초간 미발견. 캘리브레이션 영구 삭제.")
 
-            # 박스 반납 로직
             if track_id in base_data and "box_index" in base_data[track_id]:
                 box_idx = base_data[track_id].get("box_index", -1)
                 if box_idx != -1 and box_idx in game_state['calibrated_box_indices']:
                     game_state['calibrated_box_indices'].remove(box_idx)
                     print(f"-> 박스 {box_idx} 반납됨.")
             
-            # 점수 저장 로직
             if track_id in base_data:
                 if player_id != 0:
                     final_scores[player_id] = kick_counters[track_id]
                     print(f"-> 최종 점수 {kick_counters[track_id]}점 저장.")
             
-            # 모든 딕셔너리에서 해당 ID 삭제
             for d in [base_data, kick_counters, floor_timers, floor_y_history, track_id_to_player_id, 
                         l_kick_state, r_kick_state, l_reset_counter, r_reset_counter, person_kick_timer]:
                 if track_id in d: del d[track_id]
             
-            # 유예 타이머에서도 삭제
             del lost_id_timers[track_id]
 
     return pil_draw_list
@@ -724,18 +687,15 @@ def main():
         
     tracker = Sort(max_age=90, min_hits=2, iou_threshold=0.3)
     
-    # --- 상태 변수 (UI 통합) ---
     current_state = MENU_START 
     max_players = 0 
 
-    # [리팩토링] 모든 게임 상태 변수를 딕셔너리로 관리
     game_state = create_game_state()
     
-    show_debug_ui = False # 기본 비가시화
+    show_debug_ui = False
 
-    # [★★★ 게임 모드 추가 ★★★] 게임 모드용 상태 변수
     game_mode_start_time = 0.0
-    game_mode_stage = 0 # 0: 대기, 1: 설명, 2: 3, 3: 2, 4: 1, 5: 시작
+    game_mode_stage = 0
     GAME_DURATION_SECONDS = 30.0
     
     # --- 2. 카메라/화면 설정 ---
@@ -753,30 +713,23 @@ def main():
         print("웹캠 열 수 없음.")
         return 
 
-    # [★★★ 16:9 비율 고정 2/6 ★★★]
-    # 카메라의 네이티브 해상도를 일단 최대로 요청
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"카메라 실제 해상도: {frame_width} x {frame_height}")
 
-    # 프로그램의 기준 해상도 (16:9)
     TARGET_W, TARGET_H = 1920, 1080
     
-    # [★★★ 16:9 비율 고정 3/6 ★★★]
-    # 마우스 좌표 변환을 위한 변수
     mouse_scale_x, mouse_scale_y = 1.0, 1.0
     mouse_pad_x, mouse_pad_y = 0, 0
     
     mouse_clicked = False
-    mouse_pos = (0, 0) # 1920x1080 기준 좌표
+    mouse_pos = (0, 0)
     
     def mouse_callback(event, x, y, flags, param):
         nonlocal mouse_clicked, mouse_pos
         
-        # [★★★ 16:9 비율 고정 4/6 ★★★]
-        # 윈도우(모니터) 좌표(x, y)를 1920x1080 좌표로 변환
         scaled_x = int((x - mouse_pad_x) / mouse_scale_x)
         scaled_y = int((y - mouse_pad_y) / mouse_scale_y)
         mouse_pos = (scaled_x, scaled_y)
@@ -791,7 +744,6 @@ def main():
 
     # --- [수정] 폰트 로드 ---
     try:
-        # [수정] 폰트 파일을 프로젝트 내부에 포함
         FONT_PATH = resource_path(os.path.join('image', 'malgun.ttf'))
         fonts = {
             'title': ImageFont.truetype(FONT_PATH, 100),
@@ -801,17 +753,14 @@ def main():
             'ui_kick': ImageFont.truetype(FONT_PATH, 20),
             'ui_player': ImageFont.truetype(FONT_PATH, 22),
             'ui_percent': ImageFont.truetype(FONT_PATH, 20),
-            'game_button': ImageFont.truetype(FONT_PATH, 30) # [★★★ 게임 종료 추가 ★★★]
+            'game_button': ImageFont.truetype(FONT_PATH, 30)
         }
     except IOError:
         print(f"폰트 파일을 찾을 수 없습니다: {FONT_PATH}")
-        fonts = None # 폰트 로드 실패
+        fonts = None
 
-    # [★★★ 실루엣 가이드 삭제 2/3 ★★★]
-    # 모든 이미지 미리 로드 (guide_img_resized 로드 부분 삭제)
     splash_image_resized = None
     player_select_image_resized = None
-    # guide_img_resized = None # 삭제
     countdown_imgs = {}
     game_instructions_img = None
     instructions_normal_img = None 
@@ -819,23 +768,18 @@ def main():
     timer_fg_img = None
     
     try:
-        # 1. 스플래시 이미지 로드
         splash_image_path = resource_path(os.path.join('image', 'splash.png'))
         splash_image = cv2.imread(splash_image_path)
         if splash_image is None: raise FileNotFoundError("image/splash.png")
         splash_image_resized = cv2.resize(splash_image, (TARGET_W, TARGET_H))
         print("스플래시 이미지 로드 성공.")
         
-        # 2. 인원 선택 이미지 로드
         player_select_image_path = resource_path(os.path.join('image', 'player_select.png'))
         player_select_image = cv2.imread(player_select_image_path)
         if player_select_image is None: raise FileNotFoundError("image/player_select.png")
         player_select_image_resized = cv2.resize(player_select_image, (TARGET_W, TARGET_H))
         print("인원 선택 이미지 로드 성공.")
         
-        # 3. 가이드 실루엣 이미지 로드 (삭제됨)
-        
-        # 4. 카운트다운 이미지 로드 (투명도 포함)
         for i in [1, 2, 3]:
             img_path = resource_path(os.path.join('image', f'countdown_{i}.png'))
             img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
@@ -843,23 +787,20 @@ def main():
             countdown_imgs[i] = img
         print("카운트다운 이미지 로드 성공.")
 
-        # 5. 게임 설명 텍스트 이미지 로드
         img_path = resource_path(os.path.join('image', 'game_instructions.png'))
         game_instructions_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if game_instructions_img is None: raise FileNotFoundError("image/game_instructions.png")
         print("게임 설명 이미지 로드 성공.")
 
-        # 6. 타이머 바 이미지 로드
         img_path = resource_path(os.path.join('image', 'timer_bg.png'))
-        timer_bg_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED) # 시계 아이콘
+        timer_bg_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if timer_bg_img is None: raise FileNotFoundError("image/timer_bg.png")
         
         img_path = resource_path(os.path.join('image', 'timer_fg.png'))
-        timer_fg_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED) # 시계 + 초록색 바
+        timer_fg_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if timer_fg_img is None: raise FileNotFoundError("image/timer_fg.png")
         print("타이머 바 이미지 로드 성공.")
         
-        # 7. 일반 모드 설명 텍스트 이미지 로드
         img_path = resource_path(os.path.join('image', 'instructions_normal.png'))
         instructions_normal_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if instructions_normal_img is None: raise FileNotFoundError("image/instructions_normal.png")
@@ -877,6 +818,8 @@ def main():
     tracks = [] 
     active_hover_zone = -1 
     
+    has_shown_normal_instructions = False
+    
     # --- 버튼 영역 상수 ---
     radius = 35 
     margin = 30
@@ -892,6 +835,11 @@ def main():
     center_y_game = center_y_esc + radius + radius + 10 # ESC 버튼 아래
     GAME_BUTTON_ZONE = (center_x_game - radius, center_y_game - radius, center_x_game + radius, center_y_game + radius)
     
+    # [★★★ 리셋 버튼 추가 1/6 ★★★]
+    center_x_reset = TARGET_W - radius - margin # X좌표 동일
+    center_y_reset = center_y_game + radius + radius + 10 # Y좌표는 GAME 버튼 아래
+    RESET_BUTTON_ZONE_UI = (center_x_reset - radius, center_y_reset - radius, center_x_reset + radius, center_y_reset + radius)
+
     btn_w, btn_h = 300, 80
     btn_y = TARGET_H // 2 + 200
     btn_restart_x1 = (TARGET_W // 2) - btn_w - 20
@@ -902,7 +850,6 @@ def main():
     btn_normal_y1 = btn_y
     NORMAL_MODE_BUTTON_ZONE = (btn_normal_x1, btn_normal_y1, btn_normal_x1 + btn_w, btn_normal_y1 + btn_h)
 
-    # [리팩토링] PIL 텍스트 그리기를 위한 임시 객체 (매번 생성 방지)
     temp_pil_img = Image.new("RGB", (1,1))
     temp_draw = ImageDraw.Draw(temp_pil_img)
 
@@ -910,15 +857,11 @@ def main():
         ret, frame = cap.read()
         if not ret: break
             
-        # [★★★ 16:9 비율 고정 5/6 ★★★]
-        # 원본 웹캠 프레임(frame)을 1920x1080 레터박스(letterboxed_frame)로 변환
         letterboxed_frame, (ratio_x, ratio_y), (pad_w, pad_h) = letterbox(frame, new_shape=(TARGET_H, TARGET_W))
         
-        # 마우스 좌표 변환에 사용할 스케일/패딩 값 업데이트
         mouse_scale_x, mouse_scale_y = ratio_x, ratio_y
         mouse_pad_x, mouse_pad_y = pad_w, pad_h
         
-        # display_frame은 이제 항상 1920x1080입니다.
         display_frame = letterboxed_frame.copy()
 
         key = cv2.waitKeyEx(1)
@@ -946,6 +889,8 @@ def main():
                                                             mouse_pos=mouse_pos, 
                                                             player_select_img=player_select_image_resized)
             
+            has_shown_normal_instructions = False
+            
             if key == ord('q'):
                 break 
 
@@ -970,22 +915,53 @@ def main():
             
             # --- 키보드/마우스 입력 처리 (상태 변경) ---
             if key == ord('q'): break
-            elif key == 27: # ESC
+            
+            # [★★★ V/ESC/R 수정 1/3 ★★★]
+            # --- 모든 트리거를 'if/elif' 체인 *시작 전*에 계산 ---
+            esc_triggered = (key == 27) or \
+                            (mouse_clicked and is_point_in_box(mouse_pos, ESC_BUTTON_ZONE))
+            
+            game_triggered = mouse_clicked and is_point_in_box(mouse_pos, GAME_BUTTON_ZONE)
+
+            reset_triggered = (key == ord('r')) or \
+                              (mouse_clicked and is_point_in_box(mouse_pos, RESET_BUTTON_ZONE_UI))
+            
+            v_triggered = (key == ord('v')) or \
+                          (mouse_clicked and is_point_in_box(mouse_pos, V_BUTTON_ZONE))
+            # --- 트리거 계산 끝 ---
+
+
+            # [★★★ V/ESC/R 수정 2/3 ★★★]
+            # --- 'if/elif' 체인 시작 ---
+            
+            # 1. ESC (종료)
+            if esc_triggered:
                 current_state = MENU_PLAYER_SELECT 
-                game_state = create_game_state() # [리팩토링] 상태 초기화
+                game_state = create_game_state() 
                 print("인원 선택 화면으로 복귀. 모든 데이터 초기화.")
+                mouse_clicked = False 
                 continue 
             
-            if mouse_clicked and is_point_in_box(mouse_pos, GAME_BUTTON_ZONE):
+            # 2. GAME (게임 모드 시작)
+            elif game_triggered:
                 current_state = GAME_COUNTDOWN
                 game_mode_start_time = 0.0 
                 game_mode_stage = 0 
-                game_state['kick_counters'].clear() # [리팩토링]
-                game_state['final_scores'].clear()  # [리팩토링]
+                game_state['kick_counters'].clear() 
+                game_state['final_scores'].clear() 
                 mouse_clicked = False
                 print("게임 모드 진입. 스페이스바 대기 중...")
                 continue 
 
+            # 3. RESET (일반 모드 리셋)
+            # [★★★ 리셋 버튼 추가 3/6 ~ 6/6 ★★★]
+            elif reset_triggered:
+                print("--- [RESET] --- 인원 수 유지, 모든 상태 초기화.")
+                game_state = create_game_state() 
+                tracker = Sort(max_age=90, min_hits=2, iou_threshold=0.3) 
+                mouse_clicked = False 
+                continue 
+            
             # --- 키보드 입력 처리 (값 변경) ---
             elif key == 2490368: game_state['KICK_THRESH_PIXELS_Y'] += 1
             elif key == 2621440: game_state['KICK_THRESH_PIXELS_Y'] = max(1, game_state['KICK_THRESH_PIXELS_Y'] - 1)
@@ -997,15 +973,19 @@ def main():
             elif key == 2293760: game_state['KICK_COOLDOWN_FRAMES'] = max(1, game_state['KICK_COOLDOWN_FRAMES'] - 1)
             elif key == ord('8'): game_state['CALIB_BOX_BOTTOM_MARGIN'] += 5
             elif key == ord('2'): game_state['CALIB_BOX_BOTTOM_MARGIN'] = max(5, game_state['CALIB_BOX_BOTTOM_MARGIN'] - 5)
-            elif key == ord('v'): show_debug_ui = not show_debug_ui
+            
+            # [★★★ V/ESC/R 수정 3/3 ★★★]
+            # 4. V (디버그 UI 토글)
+            elif v_triggered: 
+                show_debug_ui = not show_debug_ui
+                if mouse_clicked: # 마우스로 클릭했으면
+                    mouse_clicked = False # 클릭 이벤트 소모
 
 
             # [★★★ 수정] 캘리브레이션 박스 계산
             calibration_boxes = get_calibration_boxes(max_players, TARGET_W, TARGET_H, game_state['CALIB_BOX_BOTTOM_MARGIN'])
-            game_state['active_calib_boxes'].clear() # 매 프레임 초기화
+            game_state['active_calib_boxes'].clear() 
 
-            # --- [리팩토링] 핵심 로직(YOLO, 킥판정)을 함수로 호출 ---
-            # [★★★ 수정] calibration_boxes 인자 전달, is_game_mode=False
             pil_draw_list = process_frame_logic(
                 frame, display_frame, ratio_x, ratio_y, pad_w, pad_h,
                 model, tracker, max_players, game_state, fonts, temp_draw,
@@ -1022,15 +1002,14 @@ def main():
                     is_calibrated = (i in game_state['calibrated_box_indices'])
 
                     if is_being_calibrated:
-                        color = (0, 255, 0) # Green (캘리브레이션 중)
+                        color = (0, 255, 0) # Green
                     elif is_calibrated:
-                        color = (0, 0, 255) # Red (완료됨/사용 중)
+                        color = (0, 0, 255) # Red
                     else:
-                        color = (255, 0, 0) # Blue (사용 가능)
+                        color = (255, 0, 0) # Blue
                     
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
                     
-                    # 사용 가능(파란색)일 때만 텍스트 표시
                     if not is_being_calibrated and not is_calibrated:
                         text = "여기 서주세요"
                         font = fonts['subtitle']
@@ -1047,7 +1026,21 @@ def main():
                         text_x = x1 + (box_width - text_w) // 2
                         text_y = y1 + (box_height - text_h) // 2
                         
-                        pil_draw_list.append( (text, (text_x, text_y), font, (255, 0, 0), None) ) # 파란색 텍스트
+                        pil_draw_list.append( (text, (text_x, text_y), font, (255, 0, 0), None) )
+
+            num_calibrated = len(game_state['calibrated_box_indices'])
+            
+            if (not has_shown_normal_instructions or num_calibrated < max_players) and instructions_normal_img is not None:
+                h, w = instructions_normal_img.shape[:2]
+                x_pos = (TARGET_W - w) // 2
+                y_pos = 50
+                
+                cv2.rectangle(display_frame, (x_pos - 5, y_pos - 5), (x_pos + w + 5, y_pos + h + 5), (0,0,0), -1)
+                
+                overlay_transparent(display_frame, instructions_normal_img, x_pos, y_pos)
+                
+                if num_calibrated > 0:
+                        has_shown_normal_instructions = True
 
 
             # --- 9. 공통 UI 그리기 (텍스트) ---
@@ -1058,7 +1051,7 @@ def main():
                 dark_blue_rgb = (0, 0, 205)
                 white_rgb = (255, 255, 255) 
                 
-                # ESC UI (우상단 원형)
+                # ESC UI
                 esc_text = "ESC"
                 esc_font = fonts['ui_main'] 
                 radius = 35 
@@ -1074,12 +1067,12 @@ def main():
                 text_pos = (center_x - text_w // 2, center_y - text_h // 2 - 2)
                 draw_final.text(text_pos, esc_text, font=esc_font, fill=white_rgb)
 
-                # "GAME" 버튼 그리기
+                # "GAME" 버튼
                 game_text = "GAME"
-                game_font = fonts['ui_player'] # 22pt
+                game_font = fonts['ui_player']
                 radius_g = 35
                 center_x_g = TARGET_W - radius_g - margin
-                center_y_g = center_y + radius + radius_g + 10 # ESC 버튼 아래
+                center_y_g = center_y + radius + radius_g + 10
                 draw_final.ellipse([(center_x_g - radius_g, center_y_g - radius_g), 
                                     (center_x_g + radius_g, center_y_g + radius_g)], fill=dark_blue_rgb)
                 if hasattr(draw_final, 'textbbox'):
@@ -1089,6 +1082,23 @@ def main():
                     text_w_g, text_h_g = draw_final.textsize(game_text, font=game_font)
                 text_pos_g = (center_x_g - text_w_g // 2, center_y_g - text_h_g // 2 - 2)
                 draw_final.text(text_pos_g, game_text, font=game_font, fill=white_rgb)
+
+                # [★★★ 리셋 버튼 추가 2/6 ★★★]
+                # "RESET" 버튼 그리기
+                reset_text = "RESET" # [수정] "R" -> "RESET"
+                reset_font = fonts['ui_kick'] # [수정] ui_player(22pt) -> ui_kick(20pt)
+                radius_r = 35
+                center_x_r = center_x_reset 
+                center_y_r = center_y_reset
+                draw_final.ellipse([(center_x_r - radius_r, center_y_r - radius_r), 
+                                    (center_x_r + radius_r, center_y_r + radius_r)], fill=dark_blue_rgb)
+                if hasattr(draw_final, 'textbbox'):
+                    bbox_r = draw_final.textbbox((0,0), reset_text, font=reset_font)
+                    text_w_r, text_h_r = bbox_r[2] - bbox_r[0], bbox_r[3] - bbox_r[1]
+                else:
+                    text_w_r, text_h_r = draw_final.textsize(reset_text, font=reset_font)
+                text_pos_r = (center_x_r - text_w_r // 2, center_y_r - text_h_r // 2 - 2)
+                draw_final.text(text_pos_r, reset_text, font=reset_font, fill=white_rgb)
 
                 # V-Key UI 토글
                 if show_debug_ui:
@@ -1118,12 +1128,10 @@ def main():
                 
                 # 저장된 텍스트 그리기
                 for (text, pos, font, txt_col, bg_col, *align) in pil_draw_list:
-                    # [★★★ UI 버그 수정 ★★★] align="center" 적용
                     alignment = align[0] if align else "left"
                     draw_pil_text_on_image(draw_final, text, pos, font, txt_col, bg_col, align=alignment)
                 
-                # [★★★ 프레임 최적화 ★★★]
-                # 점수가 있을 때만 "Final Scores"를 그립니다.
+                # 최종 점수판
                 final_scores = game_state['final_scores']
                 if len(final_scores) > 0:
                     x_pos = TARGET_W - 250 
@@ -1147,22 +1155,21 @@ def main():
                         text = f"Player {id_num} : {count}"
                         draw_pil_text_on_image(draw_final, text, (x_pos + 20, current_y_top), fonts['ui_kick'], (0, 255, 255), (0,0,0))
 
-                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR) # [오류 수정]
+                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR)
             
-        # [★★★ 게임 모드 추가 ★★★]
+        # -----------------------------------------------------
         # C. 게임 카운트다운 상태
         # -----------------------------------------------------
         elif current_state == GAME_COUNTDOWN:
-            display_frame = letterboxed_frame.copy() # [수정] 레터박스 프레임 사용
+            display_frame = letterboxed_frame.copy()
             
             if game_mode_stage == 0:
-                # "스페이스바를 눌러 게임을 시작하세요"
                 if fonts:
                     img_pil_final = Image.fromarray(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB))
                     draw_final = ImageDraw.Draw(img_pil_final)
                     text = "스페이스바를 눌러 게임을 시작하세요"
                     draw_pil_text_on_image(draw_final, text, (TARGET_W // 2, 50), fonts['subtitle'], (255, 255, 0), (0,0,0), align="center")
-                    display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR) # [오류 수정]
+                    display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR)
                 
                 if key == ord(' '): # 스페이스바
                     game_mode_stage = 1
@@ -1172,18 +1179,15 @@ def main():
             else:
                 elapsed = time.time() - game_mode_start_time
                 
-                # 1. 상단 텍스트 그리기
                 if game_instructions_img is not None:
                     h, w = game_instructions_img.shape[:2]
                     x_pos = (TARGET_W - w) // 2
                     y_pos = 50
                     
-                    # [★★★ 사용자 요청 수정 ★★★] 검은색 배경 추가
                     cv2.rectangle(display_frame, (x_pos - 5, y_pos - 5), (x_pos + w + 5, y_pos + h + 5), (0,0,0), -1)
                     
                     overlay_transparent(display_frame, game_instructions_img, x_pos, y_pos)
 
-                # 2. 카운트다운 숫자 그리기
                 number_to_show = 0
                 if elapsed < 1.0:
                     number_to_show = 3
@@ -1193,9 +1197,9 @@ def main():
                     number_to_show = 1
                 elif elapsed >= 3.0:
                     current_state = GAME_TIMER_RUNNING
-                    game_mode_start_time = time.time() # 30초 타이머 시작
-                    game_state['kick_counters'].clear() # [리팩토링]
-                    game_state['final_scores'].clear()  # [리팩토링]
+                    game_mode_start_time = time.time()
+                    game_state['kick_counters'].clear()
+                    game_state['final_scores'].clear() 
                     print("게임 시작!")
                     continue
                 
@@ -1209,29 +1213,26 @@ def main():
             if key == ord('q'): break
             if key == 27:
                 current_state = MENU_PLAYER_SELECT
-                game_state = create_game_state() # [리팩토링] 상태 초기화
+                game_state = create_game_state()
                 print("인원 선택 화면으로 복귀.")
                 continue
                 
-        # [★★★ 게임 모드 추가 ★★★]
+        # -----------------------------------------------------
         # D. 게임 타이머 실행 상태
         # -----------------------------------------------------
         elif current_state == GAME_TIMER_RUNNING:
             
-            # --- 1. 킥 인식 로직 (GAME_RUNNING과 동일) ---
             if key == ord('q'): break
             if key == 27:
                 current_state = MENU_PLAYER_SELECT
-                game_state = create_game_state() # [리팩토링] 상태 초기화
+                game_state = create_game_state()
                 print("인원 선택 화면으로 복귀.")
                 continue
 
-            # --- [리팩토링] 핵심 로직(YOLO, 킥판정)을 함수로 호출 ---
-            # [★★★ 수정] is_game_mode=True (신규 캘리브레이션 차단)
             pil_draw_list = process_frame_logic(
                 frame, display_frame, ratio_x, ratio_y, pad_w, pad_h,
                 model, tracker, max_players, game_state, fonts, temp_draw,
-                calibration_boxes=None, # 게임 모드에서는 박스 UI 없음
+                calibration_boxes=None,
                 is_game_mode=True
             )
 
@@ -1241,10 +1242,8 @@ def main():
             progress = elapsed / GAME_DURATION_SECONDS
 
             if time_left <= 0:
-                # 30초 종료!
                 print("게임 종료!")
                 game_state['final_scores'].clear()
-                # [리팩토링] game_state에서 값 가져오기
                 for track_id, player_id in game_state['track_id_to_player_id'].items():
                     if track_id in game_state['kick_counters']:
                         game_state['final_scores'][player_id] = game_state['kick_counters'][track_id]
@@ -1254,8 +1253,6 @@ def main():
                 continue
 
             if timer_bg_img is not None and timer_fg_img is not None:
-                # [★★★ 타이머 바 수정 ★★★]
-                # 1. 타이머 바 배경(시계) 그리기
                 h_bg, w_bg = timer_bg_img.shape[:2]
                 h_fg, w_fg = timer_fg_img.shape[:2]
                 
@@ -1263,17 +1260,19 @@ def main():
                 y_pos = 50
                 overlay_transparent(display_frame, timer_bg_img, x_pos, y_pos)
 
-                # 2. 타이머 바 채우기 (크롭)
-                clock_width = h_bg # 시계 아이콘의 너비 (정사각형 가정)
+                clock_width = h_bg
                 total_bar_width = w_fg - clock_width 
                 
-                fill_width = int(total_bar_width * progress) 
+                # [★★★ 타이머 로직 수정 (줄어들기) ★★★]
+                # progress는 (0.0 -> 1.0)으로 증가함
+                # (1.0 - progress)는 (1.0 -> 0.0)으로 감소함
+                remaining_width = int(total_bar_width * (1.0 - progress))
+                # [★★★ 수정 끝 ★★★]
 
-                if fill_width > 0:
-                    # 3. '시계+초록바' 이미지에서 '초록바' 부분만 잘라냄
-                    bar_crop = timer_fg_img[:, clock_width : clock_width + fill_width]
+                if remaining_width > 0:
+                    # [수정] remaining_width 사용
+                    bar_crop = timer_fg_img[:, clock_width : clock_width + remaining_width]
                     
-                    # 4. 시계 아이콘 *옆*에(x_pos + clock_width) 붙여넣기
                     overlay_transparent(display_frame, bar_crop, x_pos + clock_width, y_pos)
 
 
@@ -1282,69 +1281,60 @@ def main():
                 img_pil_final = Image.fromarray(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB))
                 draw_final = ImageDraw.Draw(img_pil_final)
                 
-                # 플레이어 카운트 그리기
                 for (text, pos, font, txt_col, bg_col, *align) in pil_draw_list:
                     alignment = align[0] if align else "left"
                     draw_pil_text_on_image(draw_final, text, pos, font, txt_col, bg_col, align=alignment)
                 
-                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR) # [오류 수정]
+                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR)
 
-        # [★★★ 게임 종료 추가 ★★★]
+        # -----------------------------------------------------
         # E. 게임 종료 (결과) 상태
         # -----------------------------------------------------
         elif current_state == GAME_OVER:
-            display_frame = letterboxed_frame.copy() # [수정] 레터박스 프레임 사용
+            display_frame = letterboxed_frame.copy()
             
-            # --- 1. 키/마우스 입력 처리 ---
             if key == ord('q'): break
             if key == 27: # ESC
                 current_state = MENU_PLAYER_SELECT
-                game_state = create_game_state() # [리팩토링] 상태 초기화
+                game_state = create_game_state()
                 print("인원 선택 화면으로 복귀.")
                 continue
             
             if mouse_clicked:
                 if is_point_in_box(mouse_pos, RESTART_BUTTON_ZONE):
-                    # 리스타트
                     current_state = GAME_COUNTDOWN
                     game_mode_start_time = 0.0
-                    game_mode_stage = 0 # 스페이스바 대기
-                    game_state['kick_counters'].clear() # [리팩토링]
-                    game_state['final_scores'].clear()  # [리팩토링]
+                    game_mode_stage = 0
+                    game_state['kick_counters'].clear()
+                    game_state['final_scores'].clear() 
                     mouse_clicked = False
                     print("게임 모드 재시작. 스페이스바 대기 중...")
                     continue
                 elif is_point_in_box(mouse_pos, NORMAL_MODE_BUTTON_ZONE):
-                    # 일반 모드
                     current_state = GAME_RUNNING
-                    game_state['kick_counters'].clear() # [리팩토링]
-                    game_state['final_scores'].clear()  # [리팩토링]
+                    game_state['kick_counters'].clear()
+                    game_state['final_scores'].clear() 
                     mouse_clicked = False
                     print("일반 모드로 복귀.")
                     continue
             
-            mouse_clicked = False # 버튼 안 눌렀으면 초기화
+            mouse_clicked = False
 
-            # --- 2. UI 그리기 (OpenCV) ---
-            # 반투명 검은색 배경
             overlay = display_frame.copy()
             cv2.rectangle(overlay, (0, 0), (TARGET_W, TARGET_H), (0,0,0), -1)
             display_frame = cv2.addWeighted(overlay, 0.6, display_frame, 0.4, 0)
             
-            # 버튼 그리기 (BGR 색상)
-            cv2.rectangle(display_frame, (RESTART_BUTTON_ZONE[0], RESTART_BUTTON_ZONE[1]), (RESTART_BUTTON_ZONE[2], RESTART_BUTTON_ZONE[3]), (0, 200, 0), -1) # 초록색
-            cv2.rectangle(display_frame, (NORMAL_MODE_BUTTON_ZONE[0], NORMAL_MODE_BUTTON_ZONE[1]), (NORMAL_MODE_BUTTON_ZONE[2], NORMAL_MODE_BUTTON_ZONE[3]), (205, 0, 0), -1) # 짙은 파란색
+            cv2.rectangle(display_frame, (RESTART_BUTTON_ZONE[0], RESTART_BUTTON_ZONE[1]), (RESTART_BUTTON_ZONE[2], RESTART_BUTTON_ZONE[3]), (0, 200, 0), -1)
+            cv2.rectangle(display_frame, (NORMAL_MODE_BUTTON_ZONE[0], NORMAL_MODE_BUTTON_ZONE[1]), (NORMAL_MODE_BUTTON_ZONE[2], NORMAL_MODE_BUTTON_ZONE[3]), (205, 0, 0), -1)
             
-            # --- 3. UI 그리기 (PIL 텍스트) ---
             if fonts:
                 img_pil_final = Image.fromarray(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB))
                 draw_final = ImageDraw.Draw(img_pil_final)
 
                 white_rgb = (255, 255, 255)
-                yellow_rgb = (0, 255, 255) # BGR(255,255,0) -> RGB(0,255,255)
+                yellow_rgb = (0, 255, 255)
                 
-                # 1. "Final Scores" 랭킹 그리기
-                x_pos = TARGET_W // 2 # 중앙 정렬
+                x_pos = TARGET_W // 2
                 score_text = "== Final Scores =="
                 font_title = fonts['subtitle']
                 font_score = fonts['ui_main']
@@ -1355,25 +1345,21 @@ def main():
                 else:
                     _, text_h_score = draw_final.textsize(score_text, font=font_title)
                 
-                # [수정] 점수(item[1]) 기준으로 내림차순 정렬 (랭킹)
-                final_scores = game_state['final_scores'] # [리팩토링]
+                final_scores = game_state['final_scores']
                 sorted_scores = sorted(final_scores.items(), key=lambda item: item[1], reverse=True)
                 
-                total_scores_height = text_h_score + (40 * len(sorted_scores)) # 40px 간격
-                current_y_top = (TARGET_H // 2) - (total_scores_height // 2) - 50 # 중앙보다 살짝 위
+                total_scores_height = text_h_score + (40 * len(sorted_scores))
+                current_y_top = (TARGET_H // 2) - (total_scores_height // 2) - 50
                 
-                # "Final Scores" 타이틀
                 draw_pil_text_on_image(draw_final, score_text, (x_pos, current_y_top), font_title, yellow_rgb, (0,0,0), align="center")
                 
-                current_y_top += 60 # 타이틀 아래 간격
+                current_y_top += 60
                 
-                # 랭킹 목록
                 for rank, (id_num, count) in enumerate(sorted_scores):
                     text = f"{rank + 1}위 - Player {id_num} : {count} 회"
                     draw_pil_text_on_image(draw_final, text, (x_pos, current_y_top), font_score, white_rgb, None, align="center")
                     current_y_top += 40 
                 
-                # 2. 버튼 텍스트 그리기
                 font_btn = fonts['game_button']
                 btn_text_restart = "RESTART"
                 btn_text_normal = "NORMAL MODE"
@@ -1395,16 +1381,10 @@ def main():
                 pos_n_y = NORMAL_MODE_BUTTON_ZONE[1] + (btn_h - h_n) // 2
                 draw_pil_text_on_image(draw_final, btn_text_normal, (pos_n_x, pos_n_y), font_btn, white_rgb, None)
 
-                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR) # [오류 수정]
+                display_frame = cv2.cvtColor(np.array(img_pil_final), cv2.COLOR_RGB2BGR)
 
-
-        # --- [리팩토링] 
-        # 1361~1454 라인에 있던 중복 UI 그리기 코드 블록 삭제
-        # ---
 
         # --- 최종 화면 표시 ---
-        # [★★★ 16:9 비율 고정 6/6 ★★★]
-        # 최종 1920x1080 이미지를 모니터 해상도(screen_width, screen_height)에 맞게 리사이즈
         final_display = cv2.resize(display_frame, (screen_width, screen_height), interpolation=cv2.INTER_AREA)
         cv2.imshow(WIN_NAME, final_display)
 
